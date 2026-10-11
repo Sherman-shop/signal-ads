@@ -4,7 +4,7 @@
 
 粘贴 CSV 即可查看 ROAS、成本、渠道诊断与预算模拟。
 
-**在线体验：** 部署后填写 https://你的用户名.github.io/signal-ads/
+**🌐 在线体验：** <https://Sherman-shop.github.io/signal-ads/>
 
 ## 使用方式
 
