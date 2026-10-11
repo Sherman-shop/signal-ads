@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#36e6c0">
+<title>AI 投放数据诊断仪表盘 · Signal Ads</title>
+<meta name="description" content="上传广告投放数据，自动计算 CTR/CVR/CPA/ROAS，输出止损清单、加投清单与预算再分配模拟，一键生成投放复盘报告。">
+<link rel="stylesheet" href="assets/style.css"
+<link rel="stylesheet" href="assets/theme.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+<style>
+  .verdict-card {
+    display: flex; gap: 13px; padding: 15px;
+    border-radius: var(--r); border: 1px solid var(--line);
+    background: var(--surface); margin-bottom: 10px; align-items: flex-start;
+  }
+  .verdict-card.cut   { border-left: 3px solid var(--bad); }
+  .verdict-card.scale { border-left: 3px solid var(--ok); }
+  .verdict-card.watch { border-left: 3px solid var(--warn); }
+  .verdict-card.thin  { border-left: 3px solid var(--text-faint); }
+  .verdict-ico { font-size: 19px; line-height: 1.3; flex: none; }
+  .verdict-title { font-weight: 700; font-size: 14.5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .verdict-reason { font-size: 13px; color: var(--text-dim); margin-top: 6px; line-height: 1.7; }
+  .verdict-action {
+    font-size: 13px; margin-top: 9px; padding: 9px 12px; border-radius: 9px;
+    background: rgba(124,92,255,.1); border: 1px solid rgba(124,92,255,.22); color: #ddd6fe;
+  }
+  .chart-box { background: rgba(0,0,0,.22); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; }
+  svg.chart { display: block; width: 100%; height: auto; overflow: visible; }
+  svg.chart text { font-family: var(--mono); font-size: 10px; fill: #6f7798; }
+  .bubble { cursor: pointer; transition: .2s; }
+  .bubble:hover { filter: brightness(1.35); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-faint); margin-top: 10px; }
+  .legend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+  .delta-up { color: var(--ok); font-weight: 700; }
+  .delta-down { color: var(--bad); font-weight: 700; }
+  input[type=range] { width: 100%; accent-color: #7c5cff; height: 4px; }
+  .sim-grid { display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px; align-items: center; }
+  @media (max-width:640px){ .sim-grid { grid-template-columns: 1fr; } }
+  .sim-side { background: rgba(0,0,0,.25); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; }
+</style>
+</head>
+<body>
+<div class="grid-overlay"></div>
+<header id="topbar"></header>
+
+<main class="wrap tool-page">
+
+  <div class="tool-hero fade-in">
+    <span class="eyebrow">TOOL 02 · CAMPAIGN INTELLIGENCE</span>
+    <h1 style="margin-top:14px">AI 投放数据<span class="gradient-text">诊断仪表盘</span></h1>
+    <p class="muted" style="max-width:780px">
+      把投放报表粘进来，10 秒得到一份完整复盘：核心指标、渠道效率象限、
+      <b style="color:var(--text)">止损 / 加投清单</b>，以及「把钱从 A 挪到 B 能多赚多少」的预算再分配模拟。
+    </p>
+  </div>
+
+  <div class="split">
+    <!-- ================= 左：数据与参数 ================= -->
+    <div class="sticky-col stack gap-16">
+      <div class="card fade-in">
+        <div class="section-title"><span class="step">1</span>投放数据</div>
+        <textarea id="f-data" rows="7" class="mono" style="font-size:12px"
+          placeholder="粘贴 CSV / 从 Excel 直接复制表格。需包含：渠道, 曝光, 点击, 花费, 转化, 客单价"></textarea>
+        <div class="row gap-8" style="margin-top:10px">
+          <button class="btn btn-sm" id="btn-demo" style="flex:1">📥 载入示例数据</button>
+          <label class="btn btn-sm btn-ghost" style="flex:1;cursor:pointer">
+            📎 上传 CSV<input type="file" id="f-file" accept=".csv,.txt" hidden>
+          </label>
+        </div>
+        <div class="field-hint">支持中英文表头自动识别；列顺序随意。数据只在你的浏览器里计算。</div>
+      </div>
+
+      <div class="card fade-in">
+        <div class="section-title"><span class="step">2</span>业务参数</div>
+        <label class="field">
+          <span class="field-label">商品毛利率（%）</span>
+          <input type="number" id="f-margin" value="45" min="1" max="100" step="1">
+          <span class="field-hint">用于推算盈亏平衡 ROAS = 1 ÷ 毛利率</span>
+        </label>
+        <label class="field">
+          <span class="field-label">目标 ROAS</span>
+          <input type="number" id="f-target" value="3" min="0.1" step="0.1">
+        </label>
+        <label class="field" style="margin-bottom:0">
+          <span class="field-label">最低可信点击量</span>
+          <input type="number" id="f-minclick" value="100" min="10" step="10">
+          <span class="field-hint">低于此值判为「样本不足，继续观察」，避免误杀</span>
+        </label>
+      </div>
+
+      <button class="btn btn-primary btn-lg btn-block" id="btn-run">🔍 开始诊断</button>
+    </div>
+
+    <!-- ================= 右：结果 ================= -->
+    <div class="stack gap-16" id="result" style="display:none">
+
+      <div class="card">
+        <div class="card-head"><h3>📈 核心指标总览</h3><span class="spacer"></span>
+          <span class="tiny faint" id="meta-info"></span></div>
+        <div class="kpi-grid" id="kpis"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>🎯 渠道效率象限</h3><span class="spacer"></span>
+          <span class="tiny faint">气泡大小 = 转化量</span></div>
+        <div class="chart-box"><div id="scatter"></div></div>
+        <div class="legend">
+          <span><i style="background:#34d399"></i>加大投放</span>
+          <span><i style="background:#fbbf24"></i>优化观察</span>
+          <span><i style="background:#fb7185"></i>建议止损</span>
+          <span><i style="background:#6f7798"></i>样本不足</span>
+          <span>— — 虚线为目标 ROAS</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>🧠 AI 诊断结论</h3><span class="spacer"></span>
+          <span class="tag" id="diag-mode">离线引擎</span></div>
+        <div id="verdicts"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>💰 预算再分配模拟器</h3></div>
+        <p class="small muted" style="margin-bottom:14px">
+          把「建议止损」渠道的预算，按效率加权迁移到「加大投放」渠道。模型已计入
+          <b style="color:var(--text)">边际效率衰减</b>（加预算越多，增量 ROAS 越低），不是简单线性外推。
+        </p>
+        <label class="field">
+          <span class="field-label">迁移比例：<span class="mono" id="mv-label" style="color:var(--brand-2)">60%</span></span>
+          <input type="range" id="f-move" min="0" max="100" value="60" step="5">
+        </label>
+        <div class="sim-grid" style="margin-top:6px">
+          <div class="sim-side">
+            <div class="tiny faint">当前</div>
+            <div class="kpi-value" id="sim-before">—</div>
+            <div class="tiny faint" id="sim-before-sub"></div>
+          </div>
+          <div class="center" style="font-size:22px;color:var(--brand-2)">→</div>
+          <div class="sim-side" style="border-color:rgba(52,211,153,.4)">
+            <div class="tiny faint">模拟后</div>
+            <div class="kpi-value" id="sim-after">—</div>
+            <div class="tiny faint" id="sim-after-sub"></div>
+          </div>
+        </div>
+        <div class="callout callout-ok" style="margin-top:14px"><span class="ico">📌</span><span id="sim-text"></span></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>📋 明细数据</h3><span class="spacer"></span>
+          <div class="row gap-8 no-print">
+            <button class="btn btn-sm" id="btn-report">⬇ 导出复盘报告</button>
+            <button class="btn btn-sm btn-ghost" id="btn-print">🖨 打印 / 存 PDF</button>
+          </div>
+        </div>
+        <div class="table-scroll"><table class="data" id="tbl"></table></div>
+      </div>
+    </div>
+
+    <div id="placeholder">
+      <div class="card empty">
+        <div class="big">📊</div>
+        <h3 style="color:var(--text-dim);font-weight:600">粘贴投放数据后开始诊断</h3>
+        <p class="small" style="margin-top:8px">点左侧「载入示例数据」可立即体验完整流程。</p>
+      </div>
+    </div>
+  </div>
+
+  <footer class="footer center">
+    AI 营销工具箱 · 投放诊断仪表盘 ｜ 全部计算在浏览器本地完成，数据不上传
+  </footer>
+</main>
+
+<script src="assets/ai.js"></script>
+<script>
+const { $, $$, esc, fmt, compact, pct, money, clamp, toast, download, parseCSV, findCol, num, renderTopbar, barChart } = UI;
+renderTopbar();
+
+/* ============================ 示例数据 ============================ */
+const DEMO = `渠道,曝光,点击,花费,转化,客单价
+抖音信息流-精准达人相似,962000,28860,41200,545,272
+百度搜索-品牌词,86000,6200,9800,256,249
+快手磁力金牛,680000,20400,24300,363,214
+线下地推-扫码,0,2400,16000,288,232
+小红书信息流-种草,534000,16020,28600,240,310
+腾讯广告-智能定向,1120000,22400,38700,354,262
+B站UP主-效果广告,298000,7450,18900,159,298
+抖音信息流-宽泛人群,1842000,36840,52800,315,268
+百度搜索-通用词,410000,8200,33400,152,241
+微信朋友圈-品牌曝光,2210000,13260,46500,118,255
+微博粉丝通,452000,5424,15600,52,288
+知乎问答-信息流,9800,80,3200,6,276
+小红书搜索-品牌词,9000,60,1800,8,310`;
+
+/* ============================ 解析 ============================ */
+function parse(text) {
+  const rows = parseCSV(text);
+  if (rows.length < 2) throw new Error("数据至少需要表头 + 1 行");
+  const head = rows[0];
+  const ci = {
+    name: findCol(head, ["渠道", "计划", "campaign", "channel", "名称", "广告组", "媒体"]),
+    imp:  findCol(head, ["曝光", "展示", "impression", "展现", "imp"]),
+    clk:  findCol(head, ["点击", "click", "clk"]),
+    cost: findCol(head, ["花费", "消耗", "成本", "cost", "spend", "预算"]),
+    conv: findCol(head, ["转化", "订单", "成交", "conversion", "conv", "下单"]),
+    aov:  findCol(head, ["客单价", "aov", "单价", "均价"]),
+    gmv:  findCol(head, ["gmv", "销售额", "收入", "营收", "revenue"]),
+  };
+  if (ci.name < 0 || ci.cost < 0) throw new Error("未找到「渠道」或「花费」列，请检查表头");
+
+  return rows.slice(1).map((r, i) => {
+    const clk = ci.clk >= 0 ? num(r[ci.clk]) : 0;
+    const imp = ci.imp >= 0 ? num(r[ci.imp]) : 0;
+    const cost = num(r[ci.cost]);
+    const conv = ci.conv >= 0 ? num(r[ci.conv]) : 0;
+    const aov = ci.aov >= 0 ? num(r[ci.aov]) : 0;
+    const gmv = ci.gmv >= 0 ? num(r[ci.gmv]) : conv * aov;
+    return {
+      name: r[ci.name] || "渠道" + (i + 1),
+      imp, clk, cost, conv, gmv,
+      aov: aov || (conv ? gmv / conv : 0),
+      ctr: imp ? clk / imp : null,
+      cpc: clk ? cost / clk : null,
+      cpm: imp ? (cost / imp) * 1000 : null,
+      cvr: clk ? conv / clk : null,
+      cpa: conv ? cost / conv : null,
+      roas: cost ? gmv / cost : 0,
+    };
+  }).filter((d) => d.cost > 0 || d.gmv > 0);
+}
+
+/* ============================ 诊断引擎 ============================ */
+const median = (a) => {
+  const s = a.filter((x) => x != null && isFinite(x)).sort((x, y) => x - y);
+  if (!s.length) return null;
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+function diagnose(rows, cfg) {
+  const medCTR = median(rows.map((r) => r.ctr));
+  const medCVR = median(rows.map((r) => r.cvr));
+  const medCPA = median(rows.map((r) => r.cpa));
+  const totalCost = rows.reduce((a, b) => a + b.cost, 0);
+  const breakeven = 1 / (cfg.margin / 100);
+
+  rows.forEach((r) => {
+    const reasons = [], actions = [];
+    const share = totalCost ? r.cost / totalCost : 0;
+
+    // —— 样本量判定（避免小数据误杀）
+    if (r.clk < cfg.minClick && r.conv < 10) {
+      r.verdict = "thin";
+      r.label = "样本不足";
+      r.reasons = [`点击仅 ${fmt(r.clk, 0)}，低于可信阈值 ${cfg.minClick}，当前 ROAS ${fmt(r.roas, 2)} 波动性大`];
+      r.action = `保持小额测试预算（建议 ${money(Math.max(2000, r.cost))}），跑满 ${cfg.minClick * 2} 点击后再做判断；或先做素材 A/B 加速积累样本。`;
+      r.priority = 3 + share;
+      return;
+    }
+
+    // —— 指标归因
+    const ctrLow = r.ctr != null && medCTR && r.ctr < medCTR * 0.7;
+    const ctrHigh = r.ctr != null && medCTR && r.ctr > medCTR * 1.3;
+    const cvrLow = r.cvr != null && medCVR && r.cvr < medCVR * 0.7;
+    const cvrHigh = r.cvr != null && medCVR && r.cvr > medCVR * 1.3;
+    const cpaHigh = r.cpa != null && medCPA && r.cpa > medCPA * 1.4;
+
+    if (ctrLow) reasons.push(`点击率 ${pct(r.ctr, 2)} 仅为大盘中位数的 ${fmt((r.ctr / medCTR) * 100, 0)}%，<b>素材/定向不够抓人</b>`);
+    if (ctrHigh) reasons.push(`点击率 ${pct(r.ctr, 2)} 高出中位数 ${fmt((r.ctr / medCTR - 1) * 100, 0)}%，<b>素材吸引力强</b>`);
+    if (cvrLow) reasons.push(`转化率 ${pct(r.cvr, 2)} 明显偏低，<b>流量精准度或落地页承接有问题</b>`);
+    if (cvrHigh) reasons.push(`转化率 ${pct(r.cvr, 2)} 领先大盘，<b>人群与货品高度匹配</b>`);
+    if (cpaHigh) reasons.push(`单转化成本 ${money(r.cpa)}，比中位数贵 ${fmt((r.cpa / medCPA - 1) * 100, 0)}%`);
+    if (r.roas < breakeven) reasons.push(`ROAS ${fmt(r.roas, 2)} 低于盈亏平衡线 ${fmt(breakeven, 2)}，<b>每多花 1 元就亏 ${fmt(1 - (r.roas * cfg.margin) / 100, 2)} 元毛利</b>`);
+    else if (r.roas >= cfg.target) reasons.push(`ROAS ${fmt(r.roas, 2)} 达成目标 ${fmt(cfg.target, 1)}，毛利贡献约 ${money((r.gmv * cfg.margin) / 100 - r.cost)}`);
+
+    // —— 结论
+    if (r.roas < breakeven) {
+      r.verdict = "cut"; r.label = "建议止损";
+      actions.push(`立即下调 50–100% 预算，释放出的 ${money(r.cost * 0.6)} 转投高 ROAS 渠道`);
+      if (ctrLow) actions.push("若要保留，先换 3 组新素材做小预算赛马，CTR 跑过中位数再放量");
+      if (cvrLow) actions.push("同步排查落地页加载速度、首屏卖点与优惠透出");
+      r.priority = 100 * share + (breakeven - r.roas) * 10;
+    } else if (r.roas >= cfg.target && (cvrHigh || r.conv >= 100)) {
+      r.verdict = "scale"; r.label = "加大投放";
+      actions.push(`按 20–30%/天 的节奏提预算（避免跑崩模型），优先在 ${r.name} 复制高效素材`);
+      actions.push("同时拓展相似人群包 / 竞品词，吃掉同质流量");
+      r.priority = 80 * share + r.roas * 4;
+    } else {
+      r.verdict = "watch"; r.label = "优化观察";
+      actions.push(ctrLow ? "本周迭代 3 组素材，目标 CTR 提升 30%" : cvrLow ? "优化落地页承接，目标 CVR 对齐大盘中位数" : "维持预算，按周观察 ROAS 趋势");
+      r.priority = 50 * share + 1;
+    }
+
+    r.reasons = reasons.length ? reasons : [`ROAS ${fmt(r.roas, 2)}，各项指标接近大盘中位数`];
+    r.action = actions.join("；") + "。";
+  });
+
+  rows.sort((a, b) => b.priority - a.priority);
+  return { rows, medCTR, medCVR, medCPA, breakeven, totalCost };
+}
+
+/* ============================ 预算模拟 ============================ */
+/**
+ * 边际效率衰减模型：
+ *   某渠道追加预算 Δ 后，增量部分的 ROAS = roas / (1 + k · Δ/原预算)
+ *   k = 0.35 为经验衰减系数（预算翻倍时增量效率约降至 74%）
+ */
+function simulate(rows, movePct, cfg) {
+  const DECAY = 0.35;
+  const cut = rows.filter((r) => r.verdict === "cut");
+  const scale = rows.filter((r) => r.verdict === "scale");
+  const baseCost = rows.reduce((a, b) => a + b.cost, 0);
+  const baseGMV = rows.reduce((a, b) => a + b.gmv, 0);
+
+  if (!cut.length || !scale.length) {
+    return { ok: false, baseCost, baseGMV, baseROAS: baseCost ? baseGMV / baseCost : 0, cut, scale };
+  }
+
+  const freed = cut.reduce((a, b) => a + b.cost * (movePct / 100), 0);
+  const lostGMV = cut.reduce((a, b) => a + b.gmv * (movePct / 100), 0);
+
+  const weightTotal = scale.reduce((a, b) => a + b.roas * Math.sqrt(b.cost), 0) || 1;
+  let gainGMV = 0;
+  const alloc = scale.map((r) => {
+    const add = freed * ((r.roas * Math.sqrt(r.cost)) / weightTotal);
+    const effRoas = r.roas / (1 + DECAY * (add / Math.max(r.cost, 1)));
+    const g = add * effRoas;
+    gainGMV += g;
+    return { name: r.name, add, effRoas, gain: g };
+  });
+
+  const newGMV = baseGMV - lostGMV + gainGMV;
+  return {
+    ok: true, freed, lostGMV, gainGMV, alloc, cut, scale,
+    baseCost, baseGMV, newGMV,
+    baseROAS: baseGMV / baseCost, newROAS: newGMV / baseCost,
+    baseProfit: (baseGMV * cfg.margin) / 100 - baseCost,
+    newProfit: (newGMV * cfg.margin) / 100 - baseCost,
+  };
+}
+
+/* ============================ 图表 ============================ */
+function scatterSVG(rows, cfg) {
+  const W = 760, H = 330, P = { l: 52, r: 18, t: 16, b: 38 };
+  const maxCost = Math.max(...rows.map((r) => r.cost), 1);
+  const maxRoas = Math.max(...rows.map((r) => r.roas), cfg.target * 1.3, 1);
+  const maxConv = Math.max(...rows.map((r) => r.conv), 1);
+  const x = (v) => P.l + (v / maxCost) * (W - P.l - P.r);
+  const y = (v) => H - P.b - (v / maxRoas) * (H - P.t - P.b);
+  const COLOR = { cut: "#fb7185", scale: "#34d399", watch: "#fbbf24", thin: "#6f7798" };
+
+  let g = "";
+  // 网格 + Y 轴
+  for (let i = 0; i <= 4; i++) {
+    const v = (maxRoas / 4) * i, yy = y(v);
+    g += `<line x1="${P.l}" y1="${yy}" x2="${W - P.r}" y2="${yy}" stroke="rgba(255,255,255,.07)"/>
+          <text x="${P.l - 9}" y="${yy + 3.5}" text-anchor="end">${v.toFixed(1)}</text>`;
+  }
+  // X 轴
+  for (let i = 0; i <= 4; i++) {
+    const v = (maxCost / 4) * i, xx = x(v);
+    g += `<text x="${xx}" y="${H - P.b + 17}" text-anchor="middle">${compact(v)}</text>`;
+  }
+  // 目标线 / 盈亏线
+  g += `<line x1="${P.l}" y1="${y(cfg.target)}" x2="${W - P.r}" y2="${y(cfg.target)}" stroke="#22d3ee" stroke-width="1.3" stroke-dasharray="6 4" opacity=".85"/>
+        <text x="${W - P.r}" y="${y(cfg.target) - 7}" text-anchor="end" fill="#22d3ee">目标 ROAS ${cfg.target}</text>`;
+  const be = 1 / (cfg.margin / 100);
+  if (be < maxRoas) {
+    g += `<line x1="${P.l}" y1="${y(be)}" x2="${W - P.r}" y2="${y(be)}" stroke="#fb7185" stroke-width="1.1" stroke-dasharray="3 4" opacity=".7"/>
+          <text x="${W - P.r}" y="${y(be) + 13}" text-anchor="end" fill="#fb7185">盈亏平衡 ${be.toFixed(2)}</text>`;
+  }
+  // 气泡
+  rows.forEach((r, i) => {
+    const rad = 6 + Math.sqrt(r.conv / maxConv) * 20;
+    g += `<circle class="bubble" cx="${x(r.cost)}" cy="${y(Math.min(r.roas, maxRoas))}" r="${rad}"
+        fill="${COLOR[r.verdict]}" fill-opacity=".3" stroke="${COLOR[r.verdict]}" stroke-width="1.6">
+        <title>${esc(r.name)}\n花费 ${money(r.cost)}　ROAS ${fmt(r.roas, 2)}　转化 ${fmt(r.conv, 0)}</title></circle>`;
+    if (rad > 11 || i < 6) {
+      g += `<text x="${x(r.cost)}" y="${y(Math.min(r.roas, maxRoas)) - rad - 6}" text-anchor="middle" fill="#a3abc9" font-size="9.5">${esc(r.name.slice(0, 11))}</text>`;
+    }
+  });
+
+  g += `<line x1="${P.l}" y1="${H - P.b}" x2="${W - P.r}" y2="${H - P.b}" stroke="rgba(255,255,255,.18)"/>
+        <line x1="${P.l}" y1="${P.t}" x2="${P.l}" y2="${H - P.b}" stroke="rgba(255,255,255,.18)"/>
+        <text x="${W / 2}" y="${H - 4}" text-anchor="middle" fill="#6f7798">花费 →</text>
+        <text x="14" y="${P.t + 8}" fill="#6f7798">ROAS</text>`;
+
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}">${g}</svg>`;
+}
+
+/* ============================ 渲染 ============================ */
+let STATE = null;
+
+function run() {
+  let rows;
+  try {
+    rows = parse($("#f-data").value);
+    if (!rows.length) throw new Error("没有解析到有效数据行");
+  } catch (e) {
+    toast(e.message, "bad");
+    return;
+  }
+  const cfg = {
+    margin: clamp(num($("#f-margin").value) || 45, 1, 100),
+    target: num($("#f-target").value) || 3,
+    minClick: num($("#f-minclick").value) || 100,
+  };
+  const d = diagnose(rows, cfg);
+  STATE = { ...d, cfg };
+
+  $("#placeholder").style.display = "none";
+  $("#result").style.display = "";
+
+  /* KPI */
+  const T = rows.reduce((a, r) => ({
+    imp: a.imp + r.imp, clk: a.clk + r.clk, cost: a.cost + r.cost,
+    conv: a.conv + r.conv, gmv: a.gmv + r.gmv,
+  }), { imp: 0, clk: 0, cost: 0, conv: 0, gmv: 0 });
+  const roas = T.cost ? T.gmv / T.cost : 0;
+  const profit = (T.gmv * cfg.margin) / 100 - T.cost;
+  const kpi = (label, val, sub, tone) =>
+    `<div class="kpi"><div class="kpi-label">${label}</div>
+     <div class="kpi-value" ${tone ? `style="color:var(--${tone})"` : ""}>${val}</div>
+     <div class="kpi-sub">${sub || ""}</div></div>`;
+  $("#kpis").innerHTML = [
+    kpi("总花费", money(T.cost), `${rows.length} 个渠道`),
+    kpi("总 GMV", money(T.gmv), `${fmt(T.conv, 0)} 笔转化`),
+    kpi("整体 ROAS", fmt(roas, 2), `目标 ${fmt(cfg.target, 1)}`, roas >= cfg.target ? "ok" : roas >= d.breakeven ? "warn" : "bad"),
+    kpi("毛利", money(profit), `毛利率 ${cfg.margin}%`, profit > 0 ? "ok" : "bad"),
+    kpi("平均 CPA", money(T.conv ? T.cost / T.conv : 0), `中位 ${money(d.medCPA)}`),
+    kpi("平均 CTR", pct(T.imp ? T.clk / T.imp : 0, 2), `中位 ${pct(d.medCTR, 2)}`),
+    kpi("平均 CVR", pct(T.clk ? T.conv / T.clk : 0, 2), `中位 ${pct(d.medCVR, 2)}`),
+    kpi("盈亏平衡 ROAS", fmt(d.breakeven, 2), "低于此值即亏损"),
+  ].join("");
+  $("#meta-info").textContent = "诊断时间 " + new Date().toLocaleString("zh-CN");
+
+  /* 图表 */
+  $("#scatter").innerHTML = scatterSVG(rows, cfg);
+
+  /* 诊断卡 */
+  const ICO = { cut: "🔴", scale: "🟢", watch: "🟡", thin: "⚪" };
+  const groups = [
+    ["cut", "建议止损 / 收缩"], ["scale", "建议加大投放"],
+    ["watch", "优化观察"], ["thin", "样本不足"],
+  ];
+  $("#verdicts").innerHTML = groups.map(([k, title]) => {
+    const list = rows.filter((r) => r.verdict === k);
+    if (!list.length) return "";
+    return `<div style="margin-bottom:18px">
+      <div class="tiny faint" style="margin-bottom:9px;letter-spacing:1px">${ICO[k]} ${title}（${list.length}）</div>
+      ${list.map((r) => `<div class="verdict-card ${k}">
+        <span class="verdict-ico">${ICO[k]}</span>
+        <div style="flex:1;min-width:0">
+          <div class="verdict-title">${esc(r.name)}
+            <span class="tag ${k === "cut" ? "tag-bad" : k === "scale" ? "tag-ok" : k === "watch" ? "tag-warn" : ""}">${r.label}</span>
+            <span class="tag">花费 ${money(r.cost)}</span>
+            <span class="tag">ROAS ${fmt(r.roas, 2)}</span>
+          </div>
+          <div class="verdict-reason">${r.reasons.map((x) => "· " + x).join("<br>")}</div>
+          <div class="verdict-action">👉 ${esc(r.action)}</div>
+        </div></div>`).join("")}
+    </div>`;
+  }).join("");
+
+  /* 明细表 */
+  $("#tbl").innerHTML =
+    `<thead><tr><th>渠道</th><th>结论</th><th class="num">花费</th><th class="num">曝光</th>
+      <th class="num">点击</th><th class="num">CTR</th><th class="num">CPC</th><th class="num">转化</th>
+      <th class="num">CVR</th><th class="num">CPA</th><th class="num">GMV</th><th class="num">ROAS</th></tr></thead>
+     <tbody>${rows.map((r) => `<tr>
+        <td>${esc(r.name)}</td>
+        <td><span class="tag ${r.verdict === "cut" ? "tag-bad" : r.verdict === "scale" ? "tag-ok" : r.verdict === "watch" ? "tag-warn" : ""}">${r.label}</span></td>
+        <td class="num">${money(r.cost)}</td><td class="num">${compact(r.imp)}</td>
+        <td class="num">${compact(r.clk)}</td><td class="num">${pct(r.ctr, 2)}</td>
+        <td class="num">${r.cpc ? "¥" + fmt(r.cpc, 2) : "—"}</td><td class="num">${fmt(r.conv, 0)}</td>
+        <td class="num">${pct(r.cvr, 2)}</td><td class="num">${r.cpa ? "¥" + fmt(r.cpa, 1) : "—"}</td>
+        <td class="num">${money(r.gmv)}</td>
+        <td class="num" style="color:${r.roas >= cfg.target ? "var(--ok)" : r.roas >= d.breakeven ? "var(--warn)" : "var(--bad)"};font-weight:700">${fmt(r.roas, 2)}</td>
+      </tr>`).join("")}</tbody>`;
+
+  renderSim();
+  askLLM(T, roas);
+  toast("诊断完成，共分析 " + rows.length + " 个渠道", "ok");
+  $("#result").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderSim() {
+  if (!STATE) return;
+  const movePct = num($("#f-move").value);
+  $("#mv-label").textContent = movePct + "%";
+  const s = simulate(STATE.rows, movePct, STATE.cfg);
+
+  $("#sim-before").textContent = "ROAS " + fmt(s.baseROAS, 2);
+  $("#sim-before-sub").textContent = `GMV ${money(s.baseGMV)}　花费 ${money(s.baseCost)}`;
+
+  if (!s.ok) {
+    $("#sim-after").textContent = "—";
+    $("#sim-after-sub").textContent = "";
+    $("#sim-text").innerHTML = "当前数据中<b>没有同时存在「止损」和「加投」渠道</b>，无需再分配。可调整目标 ROAS 后重新诊断。";
+    return;
+  }
+  const up = s.newROAS - s.baseROAS;
+  $("#sim-after").innerHTML = "ROAS " + fmt(s.newROAS, 2) +
+    ` <span class="small ${up >= 0 ? "delta-up" : "delta-down"}">${up >= 0 ? "▲" : "▼"}${fmt(Math.abs(up), 2)}</span>`;
+  $("#sim-after-sub").textContent = `GMV ${money(s.newGMV)}　花费不变`;
+
+  const top = s.alloc.slice().sort((a, b) => b.add - a.add).slice(0, 3);
+  $("#sim-text").innerHTML =
+    `把 ${s.cut.length} 个止损渠道 <b>${movePct}%</b> 的预算（${money(s.freed)}）迁移到 ${s.scale.length} 个高效渠道后：` +
+    `整体 ROAS <b class="${up >= 0 ? "delta-up" : "delta-down"}">${fmt(s.baseROAS, 2)} → ${fmt(s.newROAS, 2)}</b>，` +
+    `GMV 净增 <b class="${s.newGMV >= s.baseGMV ? "delta-up" : "delta-down"}">${money(s.newGMV - s.baseGMV)}</b>，` +
+    `毛利从 ${money(s.baseProfit)} 变为 <b>${money(s.newProfit)}</b>。<br>` +
+    `建议加投分配：${top.map((a) => `<b>${esc(a.name)}</b> +${money(a.add)}`).join("　")}。`;
+}
+
+/* ---------- 可选：调用真实大模型补一段策略总结 ---------- */
+async function askLLM(T, roas) {
+  if (!AI.ready) { $("#diag-mode").textContent = "离线规则引擎"; $("#diag-mode").className = "tag"; return; }
+  $("#diag-mode").innerHTML = '<span class="row gap-8"><span class="spinner"></span>大模型分析中</span>';
+  try {
+    const brief = STATE.rows.map((r) => `${r.name}|花费${Math.round(r.cost)}|ROAS${r.roas.toFixed(2)}|CTR${((r.ctr || 0) * 100).toFixed(2)}%|CVR${((r.cvr || 0) * 100).toFixed(2)}%|转化${r.conv}`).join("\n");
+    const txt = await AI.chat([
+      { role: "system", content: "你是资深效果广告投手与增长负责人，回答精炼、全部基于给定数据、给可执行动作。不要客套话。" },
+      { role: "user", content: `以下是本周投放数据（毛利率${STATE.cfg.margin}%，目标ROAS${STATE.cfg.target}）：\n${brief}\n\n整体ROAS ${roas.toFixed(2)}。请用不超过 220 字给出：1) 最关键的一个结论 2) 下周三件必做的事（按优先级）。用纯文本，分行书写。` },
+    ], { temperature: 0.5, maxTokens: 500 });
+    $("#diag-mode").innerHTML = '<span class="tag tag-brand">大模型已接入</span>';
+    const box = document.createElement("div");
+    box.className = "callout callout-info";
+    box.style.marginBottom = "16px";
+    box.innerHTML = '<span class="ico">🤖</span><div><b>大模型策略总结</b><div style="margin-top:6px;white-space:pre-wrap">' + esc(txt.trim()) + "</div></div>";
+    $("#verdicts").prepend(box);
+  } catch (e) {
+    $("#diag-mode").innerHTML = '<span class="tag tag-warn">大模型调用失败，使用规则引擎</span>';
+  }
+}
+
+/* ============================ 报告导出 ============================ */
+function report() {
+  if (!STATE) return;
+  const { rows, cfg, breakeven } = STATE;
+  const s = simulate(rows, num($("#f-move").value), cfg);
+  const T = rows.reduce((a, r) => ({ cost: a.cost + r.cost, gmv: a.gmv + r.gmv, conv: a.conv + r.conv }), { cost: 0, gmv: 0, conv: 0 });
+  const md = [
+    `# 广告投放诊断复盘报告`, ``,
+    `> 生成时间：${new Date().toLocaleString("zh-CN")}　|　毛利率 ${cfg.margin}%　|　目标 ROAS ${cfg.target}`, ``,
+    `## 一、整体表现`, ``,
+    `| 指标 | 数值 |`, `| --- | --- |`,
+    `| 总花费 | ${money(T.cost)} |`, `| 总 GMV | ${money(T.gmv)} |`,
+    `| 整体 ROAS | **${fmt(T.gmv / T.cost, 2)}** |`,
+    `| 毛利 | ${money((T.gmv * cfg.margin) / 100 - T.cost)} |`,
+    `| 总转化 | ${fmt(T.conv, 0)} |`,
+    `| 盈亏平衡 ROAS | ${fmt(breakeven, 2)} |`, ``,
+    `## 二、渠道明细`, ``,
+    `| 渠道 | 结论 | 花费 | CTR | CVR | CPA | ROAS |`, `| --- | --- | ---: | ---: | ---: | ---: | ---: |`,
+    ...rows.map((r) => `| ${r.name} | ${r.label} | ${money(r.cost)} | ${pct(r.ctr, 2)} | ${pct(r.cvr, 2)} | ${r.cpa ? "¥" + fmt(r.cpa, 1) : "—"} | ${fmt(r.roas, 2)} |`),
+    ``, `## 三、诊断结论与行动项`, ``,
+    ...rows.flatMap((r) => [
+      `### ${r.label}｜${r.name}`, ``,
+      ...r.reasons.map((x) => `- ${x.replace(/<\/?b>/g, "**")}`),
+      ``, `**行动项**：${r.action}`, ``,
+    ]),
+    `## 四、预算再分配建议`, ``,
+    s.ok
+      ? [`将止损渠道 ${num($("#f-move").value)}% 的预算（${money(s.freed)}）迁移至高效渠道后（已计入边际效率衰减）：`, ``,
+         `- 整体 ROAS：${fmt(s.baseROAS, 2)} → **${fmt(s.newROAS, 2)}**`,
+         `- GMV：${money(s.baseGMV)} → **${money(s.newGMV)}**（净增 ${money(s.newGMV - s.baseGMV)}）`,
+         `- 毛利：${money(s.baseProfit)} → **${money(s.newProfit)}**`, ``,
+         `**分配明细**`, ``, `| 渠道 | 追加预算 | 增量 ROAS | 预计增量 GMV |`, `| --- | ---: | ---: | ---: |`,
+         ...s.alloc.map((a) => `| ${a.name} | +${money(a.add)} | ${fmt(a.effRoas, 2)} | ${money(a.gain)} |`)].join("\n")
+      : "当前数据不存在同时需要止损与加投的渠道，暂无再分配建议。",
+    ``, `---`, `_由 AI 营销工具箱 · 投放诊断仪表盘生成。模型假设：增量 ROAS = 原 ROAS ÷ (1 + 0.35 × 增幅)。_`,
+  ].join("\n");
+  download(`投放诊断报告-${UI.todayISO()}.md`, md, "text/markdown");
+}
+
+/* ============================ 绑定 ============================ */
+$("#btn-run").addEventListener("click", run);
+$("#btn-demo").addEventListener("click", () => { $("#f-data").value = DEMO; toast("示例数据已载入，点击「开始诊断」"); });
+$("#btn-report").addEventListener("click", report);
+$("#btn-print").addEventListener("click", () => window.print());
+$("#f-move").addEventListener("input", renderSim);
+$("#f-file").addEventListener("change", (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const fr = new FileReader();
+  fr.onload = () => { $("#f-data").value = fr.result; toast("文件已读取：" + f.name, "ok"); };
+  fr.readAsText(f, "utf-8");
+});
+["f-margin", "f-target", "f-minclick"].forEach((id) =>
+  $("#" + id).addEventListener("change", () => { if (STATE) run(); })
+);
+</script>
+</body>
+</html>
